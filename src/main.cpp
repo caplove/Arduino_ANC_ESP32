@@ -4,6 +4,7 @@ ESP32 S2 mini
 변경사항 :
 1. ReadAndProcessIRQ()
    I2C 통신을 사용하여,ANC_New 값을 전송하도록 변경 (0x12, 400Hz)
+2. Wire.h 추가   
 */
 
 #include <Arduino.h>
@@ -215,7 +216,7 @@ void ReadAndProcessIRQ() {
 
   // I2C 통신을 사용하여,ANC_New 값을 전송
   Wire.beginTransmission(0x12); // 슬레이브의 I2C 주소 설정 0x12
-  Wire.write(ANC_New); // 슬레이브에 ANC_New를 보냄
+  Wire.write(255); // 슬레이브에 ANC_New를 보냄
   // Wire.endTransmission(true); // I2C 통신 종료 (Stop 보냄)
   Wire.endTransmission(false); // I2C 통신 종료 (Stop 안보냄) 
 
