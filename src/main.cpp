@@ -5,11 +5,11 @@ ESP32 S2 mini
 
 #include <Arduino.h>
 #include <stddef.h>
-#include "rtwtypes.h"
 #include <driver/adc.h>
+#include "rtwtypes.h"
 #include "simulink_param.h"
 
-#define VOLUMECOUNT 10  // 튜닝시에 적용되는 볼륨단계 0,1
+#define VOLUMECOUNT 10  // 튜닝시에 적용되는 볼륨단계 0~9
 #define DATACOUNT 28    // 레지스터 개수
 #define BAUDRATE 115200
 
@@ -74,6 +74,13 @@ void UImenu();
 void SetVolumeData();
 void GetVolumeData();
 void printAllVolumeData();
+
+void SetAppParameters(int volume);
+void SetAppParametersFromMEM(int volume);
+void printAppParameters(int volume);
+void printAppParametersMEM(int volume);
+void UserInput();
+
 
 // unsigned long AXC_step();
 void AXC_step();
