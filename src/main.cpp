@@ -1,6 +1,9 @@
 
 /*
 ESP32 S2 mini 
+변경사항 :
+1. ReadAndProcessIRQ()
+   I2C 통신을 사용하여,ANC_New 값을 전송하도록 변경 (0x12, 400Hz)
 */
 
 #include <Arduino.h>
@@ -8,6 +11,7 @@ ESP32 S2 mini
 #include <driver/adc.h>
 #include "rtwtypes.h"
 #include "simulink_param.h"
+#include <Wire.h>
 
 #define VOLUMECOUNT 10  // 튜닝시에 적용되는 볼륨단계 0~9
 #define DATACOUNT 28    // 레지스터 개수
@@ -93,6 +97,15 @@ unsigned long delay_10us();
 
 // ********************************************************************** //
 void setup() {
+  
+  Wire.begin();  // I2C 통신 시작
+  Wire.setClock(400000);  // I2C 통신 속도 설정 400kHz
+  
+  // Wire.beginTransmission(0x12); // 슬레이브의 I2C 주소 설정 0x12
+  // Wire.write(255); // 슬레이브에 255를 보냄
+  // Wire.endTransmission(true); // I2C 통신 종료 (Stop 보냄)
+  // Wire.endTransmission(false); // I2C 통신 종료 (Stop 안보냄)  
+
 
   Serial.begin(BAUDRATE);  // 시리얼 통신 속도 설정
 
@@ -199,6 +212,14 @@ void ReadAndProcessIRQ() {
   dacWrite(ANCPin, ANC_New);
   AAC_before = AAC_New;
   ANC_before = ANC_New;
+
+  // I2C 통신을 사용하여,ANC_New 값을 전송
+  Wire.beginTransmission(0x12); // 슬레이브의 I2C 주소 설정 0x12
+  Wire.write(ANC_New); // 슬레이브에 ANC_New를 보냄
+  // Wire.endTransmission(true); // I2C 통신 종료 (Stop 보냄)
+  Wire.endTransmission(false); // I2C 통신 종료 (Stop 안보냄) 
+
+
 
   // if (myindex == 100) {
   // unsigned long sum = 0;
