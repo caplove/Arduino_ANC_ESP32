@@ -1,7 +1,6 @@
 
 /*
 ESP32 S2 mini 
-Board Mngr : esp32 s2 로 검색할 것 (esp32 설치하면 0번 USER INT PIN not working)
 */
 
 #include <Arduino.h>
@@ -19,12 +18,16 @@ Board Mngr : esp32 s2 로 검색할 것 (esp32 설치하면 0번 USER INT PIN no
 
 //------------------------------------------------------
 #define LED_PIN 15
-#define TIMER_DURATION_US 120  // DAC의 출력주기임.  100us --> 10kHz로 DAC 보냄 x
+#define TIMER_DURATION_US 160  // DAC의 출력주기임.  100us --> 10kHz로 DAC 보냄 x
 hw_timer_t* timer = NULL;
 // portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
-volatile bool ledState = false, bTimerState = true; 
+volatile bool ledState = false, bTimerState = true;
 void IRAM_ATTR ReadAndProcessIRQ();
 //------------------------------------------------------
+
+
+long ANC_before, AAC_before;
+long AAC_New, ANC_New;
 
 static int volume = 0;
 // static float data[VOLUMECOUNT][DATACOUNT] = {
@@ -49,7 +52,7 @@ const int MEMdata[] PROGMEM = {
   10, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28
 };
 
-const int AACPin2 = 18;  // ESP32-S2 mini DAC2
+const int AACPin = 18;  // ESP32-S2 mini DAC2
 const int ANCPin = 17;   // ESP32-S2 mini DAC1
 
 int myselect;
@@ -71,19 +74,14 @@ void UImenu();
 void SetVolumeData();
 void GetVolumeData();
 void printAllVolumeData();
-void SetAppParameters(int volume);
-void SetAppParametersFromMEM(int volume);
-void printAppParameters(int volume);
-void printAppParametersMEM(int volume);
-void UserInput();
-void ReadAndProcessIRQ();
 
-unsigned long AXC_step();
+// unsigned long AXC_step();
+void AXC_step();
 unsigned long delay_10us();
 
-// 처리시간 측정용
-unsigned long processing_times[100];  // 처리 시간을 저장할 배열
-int myindex = 0;                      // 배열 인덱스
+// // 처리시간 측정용
+// unsigned long processing_times[100];  // 처리 시간을 저장할 배열
+// int myindex = 0;                      // 배열 인덱스
 
 
 // ********************************************************************** //
@@ -105,10 +103,10 @@ void setup() {
   Serial.println("MCU : S2 mini ");
   Serial.println(" ");
   Serial.println("--Pin map------------------------");
-  Serial.println("MIC1 : 3");
+  Serial.println("MIC : 3");
   Serial.println("MIC2 : 5");
   Serial.println("ANC  : 17");
-  Serial.println("AAC2 : 18");
+  Serial.println("AAC : 18");
   Serial.println("STOP : 0");
 
   UImenu();
@@ -151,9 +149,9 @@ void loop() {
   ledState = !ledState;
   digitalWrite(LED_PIN, ledState);
 
-  // dacWrite(AACPin2, rtY.AAC2);
-  // dacWrite(ANCPin, rtY.ANC);
+  // 시리얼모니터 출력 (Optional)
 
+  // Serial.print(ANC_New);Serial.println("");
   delay(1000);
 }
 
@@ -166,19 +164,46 @@ void loop() {
 void ReadAndProcessIRQ() {
 
   // 마이크 신호 읽기
-  rtU.Mic2_1 = adc1_get_raw(ADC1_CHANNEL_2);  // ADC 값을 읽음
-  rtU.Mic2_2 = adc1_get_raw(ADC1_CHANNEL_4);  // ADC 값을 읽음
+  rtU.Mic = adc1_get_raw(ADC1_CHANNEL_2);  // ADC 값을 읽음
+  // rtU.Mic2 = adc1_get_raw(ADC1_CHANNEL_4);  // ADC 값을 읽음
+  rtU.Mic = (rtU.Mic - 4596) << 4;    // float --> long type cast
+
   // SignalProcessing
+  // processing_times[myindex] = AXC_step();  // loop 안으로 변경
+  // myindex++;
   AXC_step();  // loop 안으로 변경
 
   // DAC 출력
   // Generate random value between 0 and 255
   // uint8_t randomValue = random(10);
-  // dacWrite(AACPin2, randomValue);
+  // dacWrite(AACPin, randomValue);
   // dacWrite(ANCPin, randomValue);
 
-  dacWrite(AACPin2, rtY.AAC2);
-  dacWrite(ANCPin, rtY.ANC);
+  rtY.ANC = (rtY.ANC >> 7) + 167;    // 0 ~ 255
+  rtY.AAC = (rtY.AAC >> 7) + 167;  // 0 ~ 255
+
+  // dacWrite(AACPin,rtY.AAC2);
+  // dacWrite(ANCPin, rtY.ANC);
+
+  AAC_New = ((24 * AAC_before) + (104 * rtY.AAC)) >> 7;
+  ANC_New = ((24 * ANC_before) + (104 * rtY.ANC)) >> 7;
+
+  dacWrite(AACPin, AAC_New);
+  dacWrite(ANCPin, ANC_New);
+  AAC_before = AAC_New;
+  ANC_before = ANC_New;
+
+  // if (myindex == 100) {
+  // unsigned long sum = 0;
+  // for (int i = 0; i < 100; i++) {
+  //   sum += processing_times[i];
+  // }
+  // unsigned long avg_processing_time = sum / 100;
+  // Serial.print("Average processing time: ");
+  // Serial.print(avg_processing_time);
+  // Serial.println(" us");
+  // myindex = 0; // 배열 인덱스 초기화
+  // }
 
   // // LED
   // ledState = !ledState;
@@ -192,7 +217,7 @@ void ReadAndProcessIRQ() {
 //--------------------------------------------------------
 void UImenu() {
   Serial.println("---------------UI V0.7 (23.07.26) -----------------");
-  Serial.println("[1] Set Params(10 x 28)");
+  Serial.println("[1] Set Params(10 x 27)");
   Serial.println("[2] Calibration(TBD)");
   Serial.println("[3] Monitoring (defaut: No printing)(V2,A2,Mic2,AAC2,ANC");
   Serial.println("[4] Start");
@@ -334,13 +359,17 @@ void UserInput() {
           timerAlarmEnable(timer);
           bTimerState == true;
         }
-      Serial.println("");Serial.println("");Serial.println("");  
-      Serial.println(".............................. ");  
-      Serial.println("now Working !................... ");   
-      Serial.println("Check Blue LED blinking on Main Board.. ");
-      Serial.println("Push [Reset Button] for tuning.. ");
-      Serial.println("");Serial.println("");Serial.println("");               
-      break;
+        Serial.println("");
+        Serial.println("");
+        Serial.println("");
+        Serial.println(".............................. ");
+        Serial.println("now Working !................... ");
+        Serial.println("Check Blue LED blinking on Main Board.. ");
+        Serial.println("Push [Reset Button] for tuning.. ");
+        Serial.println("");
+        Serial.println("");
+        Serial.println("");
+        break;
       }
 
     default:  // CASE 해당사항 없으면 수행
@@ -360,7 +389,7 @@ void UserInput() {
 void SetVolumeData() {
 
   int MaxDataCount = DATACOUNT;
-  Serial.println("first one is VOLUME, the others (28 ea) are INTEGER params.(* Insert SPACE between data )");
+  Serial.println("first one is VOLUME, the others (27 ea) are INTEGER params.(* Insert SPACE between data )");
   Serial.println("ex) 1 2 33 44 400 ...");
 
   // wait for data input
@@ -413,34 +442,35 @@ void GetVolumeData() {
 
 // -----------------------------------------------------
 void SetAppParameters(int volume) {
-  rtU.Gain_Velocity2 = data[volume][0];
-  rtU.Gain_Pressure2 = data[volume][1];
-  rtU.Gain_BPF1 = data[volume][2];
-  rtU.Gain_BPF2 = data[volume][3];
-  rtU.a0_Velocity2 = data[volume][4];
-  rtU.ma1_Velocity2 = data[volume][5];
-  rtU.ma2_Velocity2 = data[volume][6];
-  rtU.b0_Velocity2 = data[volume][7];
-  rtU.b1_Velocity2 = data[volume][8];
-  rtU.b2_Velocity2 = data[volume][9];
-  rtU.a0_Voltage2 = data[volume][10];
-  rtU.ma1_Voltage2 = data[volume][11];
-  rtU.ma2_Voltage2 = data[volume][12];
-  rtU.b0_Voltage2 = data[volume][13];
-  rtU.b1_Voltage2 = data[volume][14];
-  rtU.b2_Voltage2 = data[volume][15];
-  rtU.a0_MHHC1 = data[volume][16];
-  rtU.ma1_MHHC1 = data[volume][17];
-  rtU.ma2_MHHC1 = data[volume][18];
-  rtU.b0_MHHC1 = data[volume][19];
-  rtU.b1_MHHC1 = data[volume][20];
-  rtU.b2_MHHC1 = data[volume][21];
-  rtU.a0_MHHC2 = data[volume][22];
-  rtU.ma1_MHHC2 = data[volume][23];
-  rtU.ma2_MHHC2 = data[volume][24];
-  rtU.b0_MHHC2 = data[volume][25];
-  rtU.b1_MHHC2 = data[volume][26];
-  rtU.b2_MHHC2 = data[volume][27];
+
+  rtU.Gain_AAC = data[volume][0];                  
+  rtU.Gain_BPF1 = data[volume][1];                    
+  rtU.Gain_BPF2 = data[volume][2];                   
+  rtU.a0_H1 = data[volume][3];                        
+  rtU.ma1_H1 = data[volume][4];                       
+  rtU.ma2_H1 = data[volume][5];                      
+  rtU.b0_H1 = data[volume][6];                       
+  rtU.b1_H1 = data[volume][7];                        
+  rtU.b2_H1 = data[volume][8];                       
+  rtU.a0_Optimization = data[volume][9];              
+  rtU.ma1_Optimization = data[volume][10];             
+  rtU.ma2_Optimization = data[volume][11];         
+  rtU.b0_Optimization = data[volume][12];             
+  rtU.b1_Optimization = data[volume][13];             
+  rtU.b2_Optimization = data[volume][14];            
+  rtU.a0_MHHC1 = data[volume][15];                    
+  rtU.ma1_MHHC1 = data[volume][16];                   
+  rtU.ma2_MHHC1 = data[volume][17];                   
+  rtU.b0_MHHC1 = data[volume][18];                  
+  rtU.b1_MHHC1 = data[volume][19];                     
+  rtU.b2_MHHC1 = data[volume][20];                    
+  rtU.a0_MHHC2 = data[volume][21];                  
+  rtU.ma1_MHHC2 = data[volume][22];                 
+  rtU.ma2_MHHC2 = data[volume][23];               
+  rtU.b0_MHHC2 = data[volume][24];                    
+  rtU.b1_MHHC2 = data[volume][25];                  
+  rtU.b2_MHHC2 = data[volume][26];                    
+
 }
 // -----------------------------------------------------
 
@@ -450,210 +480,204 @@ void SetAppParametersFromMEM(int volume) {
   // https://onlinedocs.microchip.com/oxy/GUID-BD1C16C8-7FA3-4D73-A4BE-241EE05EF592-en-US-5/GUID-90FCF448-97F2-404D-ABF3-8B5A4AFDACBD.html
   // pgm_read_word_near 정수
   // pgm_read_word_near float경우
-  rtU.Gain_Velocity2 = pgm_read_word_near(volume * 28 + MEMdata + 0);
-  rtU.Gain_Pressure2 = pgm_read_word_near(volume * 28 + MEMdata + 1);
-  rtU.Gain_BPF1 = pgm_read_word_near(volume * 28 + MEMdata + 2);
-  rtU.Gain_BPF2 = pgm_read_word_near(volume * 28 + MEMdata + 3);
-  rtU.a0_Velocity2 = pgm_read_word_near(volume * 28 + MEMdata + 4);
-  rtU.ma1_Velocity2 = pgm_read_word_near(volume * 28 + MEMdata + 5);
-  rtU.ma2_Velocity2 = pgm_read_word_near(volume * 28 + MEMdata + 6);
-  rtU.b0_Velocity2 = pgm_read_word_near(volume * 28 + MEMdata + 7);
-  rtU.b1_Velocity2 = pgm_read_word_near(volume * 28 + MEMdata + 8);
-  rtU.b2_Velocity2 = pgm_read_word_near(volume * 28 + MEMdata + 9);
-  rtU.a0_Voltage2 = pgm_read_word_near(volume * 28 + MEMdata + 10);
-  rtU.ma1_Voltage2 = pgm_read_word_near(volume * 28 + MEMdata + 11);
-  rtU.ma2_Voltage2 = pgm_read_word_near(volume * 28 + MEMdata + 12);
-  rtU.b0_Voltage2 = pgm_read_word_near(volume * 28 + MEMdata + 13);
-  rtU.b1_Voltage2 = pgm_read_word_near(volume * 28 + MEMdata + 14);
-  rtU.b2_Voltage2 = pgm_read_word_near(volume * 28 + MEMdata + 15);
-  rtU.a0_MHHC1 = pgm_read_word_near(volume * 28 + MEMdata + 16);
-  rtU.ma1_MHHC1 = pgm_read_word_near(volume * 28 + MEMdata + 17);
-  rtU.ma2_MHHC1 = pgm_read_word_near(volume * 28 + MEMdata + 18);
-  rtU.b0_MHHC1 = pgm_read_word_near(volume * 28 + MEMdata + 19);
-  rtU.b1_MHHC1 = pgm_read_word_near(volume * 28 + MEMdata + 20);
-  rtU.b2_MHHC1 = pgm_read_word_near(volume * 28 + MEMdata + 21);
-  rtU.a0_MHHC2 = pgm_read_word_near(volume * 28 + MEMdata + 22);
-  rtU.ma1_MHHC2 = pgm_read_word_near(volume * 28 + MEMdata + 23);
-  rtU.ma2_MHHC2 = pgm_read_word_near(volume * 28 + MEMdata + 24);
-  rtU.b0_MHHC2 = pgm_read_word_near(volume * 28 + MEMdata + 25);
-  rtU.b1_MHHC2 = pgm_read_word_near(volume * 28 + MEMdata + 26);
-  rtU.b2_MHHC2 = pgm_read_word_near(volume * 28 + MEMdata + 27);
+  rtU.Gain_AAC = pgm_read_word_near(volume * 28 + MEMdata + 0);                 
+  rtU.Gain_BPF1 = pgm_read_word_near(volume * 28 + MEMdata + 1);                  
+  rtU.Gain_BPF2 = pgm_read_word_near(volume * 28 + MEMdata + 2);                   
+  rtU.a0_H1 = pgm_read_word_near(volume * 28 + MEMdata + 3);                      
+  rtU.ma1_H1 = pgm_read_word_near(volume * 28 + MEMdata + 4);                   
+  rtU.ma2_H1 = pgm_read_word_near(volume * 28 + MEMdata + 5);                    
+  rtU.b0_H1 = pgm_read_word_near(volume * 28 + MEMdata + 6);                    
+  rtU.b1_H1 = pgm_read_word_near(volume * 28 + MEMdata + 7);                       
+  rtU.b2_H1 = pgm_read_word_near(volume * 28 + MEMdata + 8);                   
+  rtU.a0_Optimization = pgm_read_word_near(volume * 28 + MEMdata + 9);             
+  rtU.ma1_Optimization = pgm_read_word_near(volume * 28 + MEMdata + 10);          
+  rtU.ma2_Optimization = pgm_read_word_near(volume * 28 + MEMdata + 11);       
+  rtU.b0_Optimization = pgm_read_word_near(volume * 28 + MEMdata + 12);            
+  rtU.b1_Optimization = pgm_read_word_near(volume * 28 + MEMdata + 13);             
+  rtU.b2_Optimization = pgm_read_word_near(volume * 28 + MEMdata + 14);           
+  rtU.a0_MHHC1 = pgm_read_word_near(volume * 28 + MEMdata + 15);               
+  rtU.ma1_MHHC1 = pgm_read_word_near(volume * 28 + MEMdata + 16);                
+  rtU.ma2_MHHC1 = pgm_read_word_near(volume * 28 + MEMdata + 17);                 
+  rtU.b0_MHHC1 = pgm_read_word_near(volume * 28 + MEMdata + 18);                
+  rtU.b1_MHHC1 = pgm_read_word_near(volume * 28 + MEMdata + 19);                    
+  rtU.b2_MHHC1 = pgm_read_word_near(volume * 28 + MEMdata + 20);                  
+  rtU.a0_MHHC2 = pgm_read_word_near(volume * 28 + MEMdata + 21);                
+  rtU.ma1_MHHC2 = pgm_read_word_near(volume * 28 + MEMdata + 22);                
+  rtU.ma2_MHHC2 = pgm_read_word_near(volume * 28 + MEMdata + 23);              
+  rtU.b0_MHHC2 = pgm_read_word_near(volume * 28 + MEMdata + 24);                   
+  rtU.b1_MHHC2 = pgm_read_word_near(volume * 28 + MEMdata + 25);                  
+  rtU.b2_MHHC2 = pgm_read_word_near(volume * 28 + MEMdata + 26);           
+
 }
 // -----------------------------------------------------
 
 void printAppParameters(int volume) {
-  Serial.print(rtU.Gain_Velocity2);
+  Serial.print(rtU.Gain_AAC);
   Serial.print(" : ");
   Serial.println(data[volume][0]);
-  Serial.print(rtU.Gain_Pressure2);
-  Serial.print(" : ");
-  Serial.println(data[volume][1]);
   Serial.print(rtU.Gain_BPF1);
   Serial.print(" : ");
-  Serial.println(data[volume][2]);
+  Serial.println(data[volume][1]);
   Serial.print(rtU.Gain_BPF2);
   Serial.print(" : ");
+  Serial.println(data[volume][2]);
+  Serial.print(rtU.a0_H1);
+  Serial.print(" : ");
   Serial.println(data[volume][3]);
-  Serial.print(rtU.a0_Velocity2);
+  Serial.print(rtU.ma1_H1);
   Serial.print(" : ");
   Serial.println(data[volume][4]);
-  Serial.print(rtU.ma1_Velocity2);
+  Serial.print(rtU.ma2_H1);
   Serial.print(" : ");
   Serial.println(data[volume][5]);
-  Serial.print(rtU.ma2_Velocity2);
+  Serial.print(rtU.b0_H1);
   Serial.print(" : ");
   Serial.println(data[volume][6]);
-  Serial.print(rtU.b0_Velocity2);
+  Serial.print(rtU.b1_H1);
   Serial.print(" : ");
   Serial.println(data[volume][7]);
-  Serial.print(rtU.b1_Velocity2);
+  Serial.print(rtU.b2_H1);
   Serial.print(" : ");
   Serial.println(data[volume][8]);
-  Serial.print(rtU.b2_Velocity2);
+  Serial.print(rtU.a0_Optimization);
   Serial.print(" : ");
   Serial.println(data[volume][9]);
-  Serial.print(rtU.a0_Voltage2);
+  Serial.print(rtU.ma1_Optimization);
   Serial.print(" : ");
   Serial.println(data[volume][10]);
-  Serial.print(rtU.ma1_Voltage2);
+  Serial.print(rtU.ma2_Optimization);
   Serial.print(" : ");
   Serial.println(data[volume][11]);
-  Serial.print(rtU.ma2_Voltage2);
+  Serial.print(rtU.b0_Optimization);
   Serial.print(" : ");
   Serial.println(data[volume][12]);
-  Serial.print(rtU.b0_Voltage2);
+  Serial.print(rtU.b1_Optimization);
   Serial.print(" : ");
   Serial.println(data[volume][13]);
-  Serial.print(rtU.b1_Voltage2);
+  Serial.print(rtU.b2_Optimization);
   Serial.print(" : ");
   Serial.println(data[volume][14]);
-  Serial.print(rtU.b2_Voltage2);
-  Serial.print(" : ");
-  Serial.println(data[volume][15]);
   Serial.print(rtU.a0_MHHC1);
   Serial.print(" : ");
-  Serial.println(data[volume][16]);
+  Serial.println(data[volume][15]);
   Serial.print(rtU.ma1_MHHC1);
   Serial.print(" : ");
-  Serial.println(data[volume][17]);
+  Serial.println(data[volume][16]);
   Serial.print(rtU.ma2_MHHC1);
   Serial.print(" : ");
-  Serial.println(data[volume][18]);
+  Serial.println(data[volume][17]);
   Serial.print(rtU.b0_MHHC1);
   Serial.print(" : ");
-  Serial.println(data[volume][19]);
+  Serial.println(data[volume][18]);
   Serial.print(rtU.b1_MHHC1);
   Serial.print(" : ");
-  Serial.println(data[volume][20]);
+  Serial.println(data[volume][19]);
   Serial.print(rtU.b2_MHHC1);
   Serial.print(" : ");
-  Serial.println(data[volume][21]);
+  Serial.println(data[volume][20]);
   Serial.print(rtU.a0_MHHC2);
   Serial.print(" : ");
-  Serial.println(data[volume][22]);
+  Serial.println(data[volume][21]);
   Serial.print(rtU.ma1_MHHC2);
   Serial.print(" : ");
-  Serial.println(data[volume][23]);
+  Serial.println(data[volume][22]);
   Serial.print(rtU.ma2_MHHC2);
   Serial.print(" : ");
-  Serial.println(data[volume][24]);
+  Serial.println(data[volume][23]);
   Serial.print(rtU.b0_MHHC2);
   Serial.print(" : ");
-  Serial.println(data[volume][25]);
+  Serial.println(data[volume][24]);
   Serial.print(rtU.b1_MHHC2);
   Serial.print(" : ");
-  Serial.println(data[volume][26]);
+  Serial.println(data[volume][25]);
   Serial.print(rtU.b2_MHHC2);
   Serial.print(" : ");
-  Serial.println(data[volume][27]);
+  Serial.println(data[volume][26]);
 }
 
 
 void printAppParametersMEM(int volume) {
-  Serial.print(rtU.Gain_Velocity2);
+  Serial.print(rtU.Gain_AAC);
   Serial.print(" : ");
   Serial.println(pgm_read_word_near(volume * 28 + MEMdata + 0));
-  Serial.print(rtU.Gain_Pressure2);
-  Serial.print(" : ");
-  Serial.println(pgm_read_word_near(volume * 28 + MEMdata + 1));
   Serial.print(rtU.Gain_BPF1);
   Serial.print(" : ");
-  Serial.println(pgm_read_word_near(volume * 28 + MEMdata + 2));
+  Serial.println(pgm_read_word_near(volume * 28 + MEMdata + 1));
   Serial.print(rtU.Gain_BPF2);
   Serial.print(" : ");
+  Serial.println(pgm_read_word_near(volume * 28 + MEMdata + 2));
+  Serial.print(rtU.a0_H1);
+  Serial.print(" : ");
   Serial.println(pgm_read_word_near(volume * 28 + MEMdata + 3));
-  Serial.print(rtU.a0_Velocity2);
+  Serial.print(rtU.ma1_H1);
   Serial.print(" : ");
   Serial.println(pgm_read_word_near(volume * 28 + MEMdata + 4));
-  Serial.print(rtU.ma1_Velocity2);
+  Serial.print(rtU.ma2_H1);
   Serial.print(" : ");
   Serial.println(pgm_read_word_near(volume * 28 + MEMdata + 5));
-  Serial.print(rtU.ma2_Velocity2);
+  Serial.print(rtU.b0_H1);
   Serial.print(" : ");
   Serial.println(pgm_read_word_near(volume * 28 + MEMdata + 6));
-  Serial.print(rtU.b0_Velocity2);
+  Serial.print(rtU.b1_H1);
   Serial.print(" : ");
   Serial.println(pgm_read_word_near(volume * 28 + MEMdata + 7));
-  Serial.print(rtU.b1_Velocity2);
+  Serial.print(rtU.b2_H1);
   Serial.print(" : ");
   Serial.println(pgm_read_word_near(volume * 28 + MEMdata + 8));
-  Serial.print(rtU.b2_Velocity2);
+  Serial.print(rtU.a0_Optimization);
   Serial.print(" : ");
   Serial.println(pgm_read_word_near(volume * 28 + MEMdata + 9));
-  Serial.print(rtU.a0_Voltage2);
+  Serial.print(rtU.ma1_Optimization);
   Serial.print(" : ");
   Serial.println(pgm_read_word_near(volume * 28 + MEMdata + 10));
-  Serial.print(rtU.ma1_Voltage2);
+  Serial.print(rtU.ma2_Optimization);
   Serial.print(" : ");
   Serial.println(pgm_read_word_near(volume * 28 + MEMdata + 11));
-  Serial.print(rtU.ma2_Voltage2);
+  Serial.print(rtU.b0_Optimization);
   Serial.print(" : ");
   Serial.println(pgm_read_word_near(volume * 28 + MEMdata + 12));
-  Serial.print(rtU.b0_Voltage2);
+  Serial.print(rtU.b1_Optimization);
   Serial.print(" : ");
   Serial.println(pgm_read_word_near(volume * 28 + MEMdata + 13));
-  Serial.print(rtU.b1_Voltage2);
+  Serial.print(rtU.b2_Optimization);
   Serial.print(" : ");
   Serial.println(pgm_read_word_near(volume * 28 + MEMdata + 14));
-  Serial.print(rtU.b2_Voltage2);
-  Serial.print(" : ");
-  Serial.println(pgm_read_word_near(volume * 28 + MEMdata + 15));
   Serial.print(rtU.a0_MHHC1);
   Serial.print(" : ");
-  Serial.println(pgm_read_word_near(volume * 28 + MEMdata + 16));
+  Serial.println(pgm_read_word_near(volume * 28 + MEMdata + 15));
   Serial.print(rtU.ma1_MHHC1);
   Serial.print(" : ");
-  Serial.println(pgm_read_word_near(volume * 28 + MEMdata + 17));
+  Serial.println(pgm_read_word_near(volume * 28 + MEMdata + 16));
   Serial.print(rtU.ma2_MHHC1);
   Serial.print(" : ");
-  Serial.println(pgm_read_word_near(volume * 28 + MEMdata + 18));
+  Serial.println(pgm_read_word_near(volume * 28 + MEMdata + 17));
   Serial.print(rtU.b0_MHHC1);
   Serial.print(" : ");
-  Serial.println(pgm_read_word_near(volume * 28 + MEMdata + 19));
+  Serial.println(pgm_read_word_near(volume * 28 + MEMdata + 18));
   Serial.print(rtU.b1_MHHC1);
   Serial.print(" : ");
-  Serial.println(pgm_read_word_near(volume * 28 + MEMdata + 20));
+  Serial.println(pgm_read_word_near(volume * 28 + MEMdata + 19));
   Serial.print(rtU.b2_MHHC1);
   Serial.print(" : ");
-  Serial.println(pgm_read_word_near(volume * 28 + MEMdata + 21));
+  Serial.println(pgm_read_word_near(volume * 28 + MEMdata + 20));
   Serial.print(rtU.a0_MHHC2);
   Serial.print(" : ");
-  Serial.println(pgm_read_word_near(volume * 28 + MEMdata + 22));
+  Serial.println(pgm_read_word_near(volume * 28 + MEMdata + 21));
   Serial.print(rtU.ma1_MHHC2);
   Serial.print(" : ");
-  Serial.println(pgm_read_word_near(volume * 28 + MEMdata + 23));
+  Serial.println(pgm_read_word_near(volume * 28 + MEMdata + 22));
   Serial.print(rtU.ma2_MHHC2);
   Serial.print(" : ");
-  Serial.println(pgm_read_word_near(volume * 28 + MEMdata + 24));
+  Serial.println(pgm_read_word_near(volume * 28 + MEMdata + 23));
   Serial.print(rtU.b0_MHHC2);
   Serial.print(" : ");
-  Serial.println(pgm_read_word_near(volume * 28 + MEMdata + 25));
+  Serial.println(pgm_read_word_near(volume * 28 + MEMdata + 24));
   Serial.print(rtU.b1_MHHC2);
   Serial.print(" : ");
-  Serial.println(pgm_read_word_near(volume * 28 + MEMdata + 26));
+  Serial.println(pgm_read_word_near(volume * 28 + MEMdata + 25));
   Serial.print(rtU.b2_MHHC2);
   Serial.print(" : ");
-  Serial.println(pgm_read_word_near(volume * 28 + MEMdata + 27));
+  Serial.println(pgm_read_word_near(volume * 28 + MEMdata + 26));
 }
 
 
@@ -680,125 +704,124 @@ void printAllVolumeData() {
 
 // -----------------------------------------------------
 /* Model step function */
-unsigned long AXC_step(void) {  // 측정시간용
+// unsigned long AXC_step(void) {  // 측정시간용
+void AXC_step(void) {  // 측정시간용
+  // unsigned long start_time = micros();  // 처리 시작 시간 측정
+  long rtb_Delay;
+  long rtb_Delay_a;
+  long rtb_Delay_f;
+  long rtb_Delay_g;
+  long rtb_Divide;
+  long rtb_Divide_d;
+  long rtb_Divide_m;
+  long rtb_Divide_n;
 
-  unsigned long start_time = micros();  // 처리 시작 시간 측정
-  real_T rtb_Delay;
-  real_T rtb_Delay_h;
-  real_T rtb_Delay_k;
-  real_T rtb_Delay_o;
-  real_T rtb_Divide;
-  real_T rtb_Divide_a;
-  real_T rtb_Divide_b;
-  real_T rtb_Sum2_d;
-
-  /* Sum: '<Root>/Sum2' incorporates:
-   *  Inport: '<Root>/Mic2_1'
-   *  Inport: '<Root>/Mic2_2'
-   */
-  rtb_Sum2_d = rtU.Mic2_1 + rtU.Mic2_2;
-
-  /* Delay: '<S3>/Delay' */
+  /* Delay: '<S1>/Delay' */
   rtb_Delay = rtDW.Delay_DSTATE;
 
-  /* Product: '<S3>/Divide' incorporates:
-   *  Delay: '<S3>/Delay'
-   *  Delay: '<S3>/Delay1'
-   *  Inport: '<Root>/Mic2_1'
-   *  Inport: '<Root>/Mic2_2'
-   *  Inport: '<Root>/a0_Velocity2'
-   *  Inport: '<Root>/ma1_Velocity2'
-   *  Inport: '<Root>/ma2_Velocity2'
-   *  Product: '<S3>/Product'
-   *  Product: '<S3>/Product2'
-   *  Sum: '<Root>/Sum1'
-   *  Sum: '<S3>/Sum2'
-   *  Sum: '<S3>/Sum3'
+  /* Product: '<S1>/Divide' incorporates:
+   *  Delay: '<S1>/Delay'
+   *  Delay: '<S1>/Delay1'
+   *  Inport: '<Root>/Mic'
+   *  Inport: '<Root>/a0_H1'
+   *  Inport: '<Root>/ma1_H1'
+   *  Inport: '<Root>/ma2_H1'
+   *  Product: '<S1>/Product'
+   *  Product: '<S1>/Product2'
+   *  Sum: '<S1>/Sum2'
+   *  Sum: '<S1>/Sum3'
    */
-  rtb_Divide = ((rtDW.Delay_DSTATE * rtU.ma1_Velocity2 + rtDW.Delay1_DSTATE * rtU.ma2_Velocity2) + (rtU.Mic2_1 - rtU.Mic2_2)) / rtU.a0_Velocity2;
+  rtb_Divide = ((rtDW.Delay_DSTATE * rtU.ma1_H1 + rtDW.Delay1_DSTATE *
+                 rtU.ma2_H1) + rtU.Mic) >> rtU.a0_H1;
 
   /* Delay: '<S4>/Delay' */
-  rtb_Delay_o = rtDW.Delay_DSTATE_o;
+  rtb_Delay_g = rtDW.Delay_DSTATE_f;
 
   /* Product: '<S4>/Divide' incorporates:
-   *  Delay: '<S3>/Delay'
-   *  Delay: '<S3>/Delay1'
+   *  Delay: '<S1>/Delay'
+   *  Delay: '<S1>/Delay1'
    *  Delay: '<S4>/Delay'
    *  Delay: '<S4>/Delay1'
-   *  Inport: '<Root>/Gain_Pressure2'
-   *  Inport: '<Root>/Gain_Velocity2'
-   *  Inport: '<Root>/a0_Voltage2'
-   *  Inport: '<Root>/b0_Velocity2'
-   *  Inport: '<Root>/b1_Velocity2'
-   *  Inport: '<Root>/b2_Velocity2'
-   *  Inport: '<Root>/ma1_Voltage2'
-   *  Inport: '<Root>/ma2_Voltage2'
+   *  Inport: '<Root>/Gain_AAC'
+   *  Inport: '<Root>/a0_Optimization'
+   *  Inport: '<Root>/b0_H1'
+   *  Inport: '<Root>/b1_H1'
+   *  Inport: '<Root>/b2_H1'
+   *  Inport: '<Root>/ma1_Optimization'
+   *  Inport: '<Root>/ma2_Optimization'
    *  Product: '<Root>/Product2'
-   *  Product: '<Root>/Product3'
-   *  Product: '<S3>/Product3'
-   *  Product: '<S3>/Product4'
-   *  Product: '<S3>/Product5'
+   *  Product: '<S1>/Product3'
+   *  Product: '<S1>/Product4'
+   *  Product: '<S1>/Product5'
    *  Product: '<S4>/Product'
    *  Product: '<S4>/Product2'
-   *  Sum: '<Root>/Sum3'
-   *  Sum: '<S3>/Sum'
-   *  Sum: '<S3>/Sum1'
+   *  Sum: '<S1>/Sum'
+   *  Sum: '<S1>/Sum1'
    *  Sum: '<S4>/Sum2'
    *  Sum: '<S4>/Sum3'
    */
-  rtb_Divide_b = ((((rtDW.Delay_DSTATE * rtU.b1_Velocity2 + rtDW.Delay1_DSTATE * rtU.b2_Velocity2) + rtb_Divide * rtU.b0_Velocity2) * rtU.Gain_Velocity2 + rtb_Sum2_d * rtU.Gain_Pressure2) + (rtDW.Delay_DSTATE_o * rtU.ma1_Voltage2 + rtDW.Delay1_DSTATE_d * rtU.ma2_Voltage2)) / rtU.a0_Voltage2;
+  rtb_Divide_d = (((rtDW.Delay_DSTATE * rtU.b1_H1 + rtDW.Delay1_DSTATE *
+                    rtU.b2_H1) + rtb_Divide * rtU.b0_H1) * rtU.Gain_AAC +
+                  (rtDW.Delay_DSTATE_f * rtU.ma1_Optimization +
+                   rtDW.Delay1_DSTATE_b * rtU.ma2_Optimization)) >>
+    rtU.a0_Optimization;
 
-  /* Outport: '<Root>/AAC2' incorporates:
+  /* Outport: '<Root>/AAC' incorporates:
    *  Delay: '<S4>/Delay'
    *  Delay: '<S4>/Delay1'
-   *  Inport: '<Root>/b0_Voltage2'
-   *  Inport: '<Root>/b1_Voltage2'
-   *  Inport: '<Root>/b2_Voltage2'
+   *  Inport: '<Root>/b0_Optimization'
+   *  Inport: '<Root>/b1_Optimization'
+   *  Inport: '<Root>/b2_Optimization'
    *  Product: '<S4>/Product3'
    *  Product: '<S4>/Product4'
    *  Product: '<S4>/Product5'
    *  Sum: '<S4>/Sum'
    *  Sum: '<S4>/Sum1'
    */
-  rtY.AAC2 = (rtDW.Delay_DSTATE_o * rtU.b1_Voltage2 + rtDW.Delay1_DSTATE_d * rtU.b2_Voltage2) + rtb_Divide_b * rtU.b0_Voltage2;
-
-  /* Delay: '<S1>/Delay' */
-  rtb_Delay_h = rtDW.Delay_DSTATE_d;
-
-  /* Product: '<S1>/Divide' incorporates:
-   *  Delay: '<S1>/Delay'
-   *  Delay: '<S1>/Delay1'
-   *  Inport: '<Root>/a0_MHHC1'
-   *  Inport: '<Root>/ma1_MHHC1'
-   *  Inport: '<Root>/ma2_MHHC1'
-   *  Product: '<S1>/Product'
-   *  Product: '<S1>/Product2'
-   *  Sum: '<S1>/Sum2'
-   *  Sum: '<S1>/Sum3'
-   */
-  rtb_Divide_a = ((rtDW.Delay_DSTATE_d * rtU.ma1_MHHC1 + rtDW.Delay1_DSTATE_p * rtU.ma2_MHHC1) + rtb_Sum2_d) / rtU.a0_MHHC1;
+  rtY.AAC = (rtDW.Delay_DSTATE_f * rtU.b1_Optimization + rtDW.Delay1_DSTATE_b *
+             rtU.b2_Optimization) + rtb_Divide_d * rtU.b0_Optimization;
 
   /* Delay: '<S2>/Delay' */
-  rtb_Delay_k = rtDW.Delay_DSTATE_m;
+  rtb_Delay_a = rtDW.Delay_DSTATE_a;
 
   /* Product: '<S2>/Divide' incorporates:
    *  Delay: '<S2>/Delay'
    *  Delay: '<S2>/Delay1'
-   *  Inport: '<Root>/a0_MHHC2'
-   *  Inport: '<Root>/ma1_MHHC2'
-   *  Inport: '<Root>/ma2_MHHC2'
+   *  Inport: '<Root>/Mic'
+   *  Inport: '<Root>/a0_MHHC1'
+   *  Inport: '<Root>/ma1_MHHC1'
+   *  Inport: '<Root>/ma2_MHHC1'
    *  Product: '<S2>/Product'
    *  Product: '<S2>/Product2'
    *  Sum: '<S2>/Sum2'
    *  Sum: '<S2>/Sum3'
    */
-  rtb_Sum2_d = ((rtDW.Delay_DSTATE_m * rtU.ma1_MHHC2 + rtDW.Delay1_DSTATE_h * rtU.ma2_MHHC2) + rtb_Sum2_d) / rtU.a0_MHHC2;
+  rtb_Divide_m = ((rtDW.Delay_DSTATE_a * rtU.ma1_MHHC1 + rtDW.Delay1_DSTATE_l *
+                   rtU.ma2_MHHC1) + rtU.Mic) >> rtU.a0_MHHC1;
+
+  /* Delay: '<S3>/Delay' */
+  rtb_Delay_f = rtDW.Delay_DSTATE_l;
+
+  /* Product: '<S3>/Divide' incorporates:
+   *  Delay: '<S3>/Delay'
+   *  Delay: '<S3>/Delay1'
+   *  Inport: '<Root>/Mic'
+   *  Inport: '<Root>/a0_MHHC2'
+   *  Inport: '<Root>/ma1_MHHC2'
+   *  Inport: '<Root>/ma2_MHHC2'
+   *  Product: '<S3>/Product'
+   *  Product: '<S3>/Product2'
+   *  Sum: '<S3>/Sum2'
+   *  Sum: '<S3>/Sum3'
+   */
+  rtb_Divide_n = ((rtDW.Delay_DSTATE_l * rtU.ma1_MHHC2 + rtDW.Delay1_DSTATE_f *
+                   rtU.ma2_MHHC2) + rtU.Mic) >> rtU.a0_MHHC2;
 
   /* Outport: '<Root>/ANC' incorporates:
-   *  Delay: '<S1>/Delay'
-   *  Delay: '<S1>/Delay1'
    *  Delay: '<S2>/Delay'
    *  Delay: '<S2>/Delay1'
+   *  Delay: '<S3>/Delay'
+   *  Delay: '<S3>/Delay1'
    *  Inport: '<Root>/Gain_BPF1'
    *  Inport: '<Root>/Gain_BPF2'
    *  Inport: '<Root>/b0_MHHC1'
@@ -809,46 +832,49 @@ unsigned long AXC_step(void) {  // 측정시간용
    *  Inport: '<Root>/b2_MHHC2'
    *  Product: '<Root>/Product4'
    *  Product: '<Root>/Product5'
-   *  Product: '<S1>/Product3'
-   *  Product: '<S1>/Product4'
-   *  Product: '<S1>/Product5'
    *  Product: '<S2>/Product3'
    *  Product: '<S2>/Product4'
    *  Product: '<S2>/Product5'
+   *  Product: '<S3>/Product3'
+   *  Product: '<S3>/Product4'
+   *  Product: '<S3>/Product5'
    *  Sum: '<Root>/Sum4'
-   *  Sum: '<S1>/Sum'
-   *  Sum: '<S1>/Sum1'
    *  Sum: '<S2>/Sum'
    *  Sum: '<S2>/Sum1'
+   *  Sum: '<S3>/Sum'
+   *  Sum: '<S3>/Sum1'
    */
-  rtY.ANC = ((rtDW.Delay_DSTATE_d * rtU.b1_MHHC1 + rtDW.Delay1_DSTATE_p * rtU.b2_MHHC1) + rtb_Divide_a * rtU.b0_MHHC1) * rtU.Gain_BPF1 + ((rtDW.Delay_DSTATE_m * rtU.b1_MHHC2 + rtDW.Delay1_DSTATE_h * rtU.b2_MHHC2) + rtb_Sum2_d * rtU.b0_MHHC2) * rtU.Gain_BPF2;
+  rtY.ANC = ((rtDW.Delay_DSTATE_a * rtU.b1_MHHC1 + rtDW.Delay1_DSTATE_l *
+              rtU.b2_MHHC1) + rtb_Divide_m * rtU.b0_MHHC1) * rtU.Gain_BPF1 +
+    ((rtDW.Delay_DSTATE_l * rtU.b1_MHHC2 + rtDW.Delay1_DSTATE_f * rtU.b2_MHHC2)
+     + rtb_Divide_n * rtU.b0_MHHC2) * rtU.Gain_BPF2;
 
-  /* Update for Delay: '<S3>/Delay' */
+  /* Update for Delay: '<S1>/Delay' */
   rtDW.Delay_DSTATE = rtb_Divide;
 
-  /* Update for Delay: '<S3>/Delay1' */
+  /* Update for Delay: '<S1>/Delay1' */
   rtDW.Delay1_DSTATE = rtb_Delay;
 
   /* Update for Delay: '<S4>/Delay' */
-  rtDW.Delay_DSTATE_o = rtb_Divide_b;
+  rtDW.Delay_DSTATE_f = rtb_Divide_d;
 
   /* Update for Delay: '<S4>/Delay1' */
-  rtDW.Delay1_DSTATE_d = rtb_Delay_o;
-
-  /* Update for Delay: '<S1>/Delay' */
-  rtDW.Delay_DSTATE_d = rtb_Divide_a;
-
-  /* Update for Delay: '<S1>/Delay1' */
-  rtDW.Delay1_DSTATE_p = rtb_Delay_h;
+  rtDW.Delay1_DSTATE_b = rtb_Delay_g;
 
   /* Update for Delay: '<S2>/Delay' */
-  rtDW.Delay_DSTATE_m = rtb_Sum2_d;
+  rtDW.Delay_DSTATE_a = rtb_Divide_m;
 
   /* Update for Delay: '<S2>/Delay1' */
-  rtDW.Delay1_DSTATE_h = rtb_Delay_k;
+  rtDW.Delay1_DSTATE_l = rtb_Delay_a;
 
-  unsigned long end_time = micros();  // 처리 종료 시간 측정
-  return end_time - start_time;
+  /* Update for Delay: '<S3>/Delay' */
+  rtDW.Delay_DSTATE_l = rtb_Divide_n;
+
+  /* Update for Delay: '<S3>/Delay1' */
+  rtDW.Delay1_DSTATE_f = rtb_Delay_f;
+
+  // unsigned long end_time = micros();  // 처리 종료 시간 측정
+  // return end_time - start_time;
 }
 
 
