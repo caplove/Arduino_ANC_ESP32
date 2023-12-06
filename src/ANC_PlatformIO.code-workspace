@@ -1,0 +1,13 @@
+{
+	"folders": [
+		{
+			"name": "ANC_PlatformIO",
+			"path": ".."
+		}
+	],
+	"settings": {
+		"files.associations": {
+			"esp32-hal.h": "c"
+		}
+	}
+}
