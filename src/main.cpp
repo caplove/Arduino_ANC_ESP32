@@ -3,7 +3,7 @@
 ESP32 S2 mini 
 변경사항 :
 1. ReadAndProcessIRQ()
-   I2C 통신을 사용하여,ANC_New 값을 전송하도록 변경 (0x12, 400Hz)
+   I2C 통신을 사용하여,ANC_New 값을 전송하도록 변경 (0x12, 100kHz)
 2. Wire.h 추가   
 */
 
@@ -24,6 +24,7 @@ ESP32 S2 mini
 //------------------------------------------------------
 #define LED_PIN 15
 #define TIMER_DURATION_US 160  // DAC의 출력주기임.  100us --> 10kHz로 DAC 보냄 x
+
 hw_timer_t* timer = NULL;
 // portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
 volatile bool ledState = false, bTimerState = true;
@@ -33,7 +34,7 @@ void IRAM_ATTR ReadAndProcessIRQ();
 
 long ANC_before, AAC_before;
 long AAC_New, ANC_New;
-
+bool send_flag = false;
 static int volume = 0;
 // static float data[VOLUMECOUNT][DATACOUNT] = {
 static int data[VOLUMECOUNT][DATACOUNT] = {
@@ -100,13 +101,7 @@ unsigned long delay_10us();
 void setup() {
   
   Wire.begin();  // I2C 통신 시작
-  Wire.setClock(400000);  // I2C 통신 속도 설정 400kHz
-  
-  // Wire.beginTransmission(0x12); // 슬레이브의 I2C 주소 설정 0x12
-  // Wire.write(255); // 슬레이브에 255를 보냄
-  // Wire.endTransmission(true); // I2C 통신 종료 (Stop 보냄)
-  // Wire.endTransmission(false); // I2C 통신 종료 (Stop 안보냄)  
-
+  Wire.setClock(100000);  // I2C 통신 속도 설정 100kHz
 
   Serial.begin(BAUDRATE);  // 시리얼 통신 속도 설정
 
@@ -132,7 +127,7 @@ void setup() {
 
   UImenu();
 
-  // ESP32 인터럽트 타이머 설정 ----------------------------------------------------------
+  // ESP32 인터럽트 타이머1 설정 ----------------------------------------------------------
   // Use 0th timer of 4 (counted from zero).
   // Set 80 divider for prescaler (see ESP32-S2 Technical Reference Manual for more info).
   timer = timerBegin(0, 80, true);
@@ -145,6 +140,10 @@ void setup() {
 
   // Start the timer alarm
   timerAlarmEnable(timer);
+
+
+
+
   //----------------------------------------------------------------------------------------
 }
 // ********************************************************************** //
@@ -171,9 +170,22 @@ void loop() {
   digitalWrite(LED_PIN, ledState);
 
   // 시리얼모니터 출력 (Optional)
-
   // Serial.print(ANC_New);Serial.println("");
-  delay(1000);
+
+  if (send_flag) {
+    Wire.beginTransmission(0x12); // 슬레이브의 I2C 주소 설정 0x12
+    Wire.write((byte*)&ANC_New, sizeof(ANC_New)); // Send the long integer to the slave device
+
+    // Wire.write("Hi"); // 슬레이브에 255를 보냄
+    Wire.endTransmission(); // I2C 통신 종료 (Stop 안보냄)  
+    send_flag = false;
+  }
+  // delay(1000);
+
+  // 10us delay
+  delayMicroseconds(10);
+
+
 }
 
 
@@ -208,19 +220,17 @@ void ReadAndProcessIRQ() {
 
   AAC_New = ((24 * AAC_before) + (104 * rtY.AAC)) >> 7;
   ANC_New = ((24 * ANC_before) + (104 * rtY.ANC)) >> 7;
+  
+  send_flag = true;
 
   dacWrite(AACPin, AAC_New);
   dacWrite(ANCPin, ANC_New);
   AAC_before = AAC_New;
   ANC_before = ANC_New;
 
-  // I2C 통신을 사용하여,ANC_New 값을 전송
-  Wire.beginTransmission(0x12); // 슬레이브의 I2C 주소 설정 0x12
-  Wire.write(255); // 슬레이브에 ANC_New를 보냄
-  // Wire.endTransmission(true); // I2C 통신 종료 (Stop 보냄)
-  Wire.endTransmission(false); // I2C 통신 종료 (Stop 안보냄) 
-
-
+  // Wire.beginTransmission(0x12); // 슬레이브의 I2C 주소 설정 0x12
+  // Wire.write(255); // 슬레이브에 255를 보냄
+  // Wire.endTransmission(false); // I2C 통신 종료 (Stop 안보냄)  
 
   // if (myindex == 100) {
   // unsigned long sum = 0;
